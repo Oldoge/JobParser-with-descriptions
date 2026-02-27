@@ -1,3 +1,7 @@
 .venv
 .idea
 results/perfect_target_jobs.csv
+.env
+*.pyc
+results/cv_analysis_report.md
+cv.pdf

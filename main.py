@@ -5,10 +5,11 @@ from scraper.driver import setup_driver
 from scraper.collector import collect_links
 from scraper.parser import extract_job_details
 from utils.filters import is_unsuitable_job, is_matching_target
+from utils.analyzer import analyze_jobs_with_cv
 
 
 def main():
-    print("Starting Modular Deep Scraper (Python focus, time filters applied)...")
+    print("Starting Modular Deep Scraper...")
     driver = setup_driver()
 
     all_links = []
@@ -30,7 +31,7 @@ def main():
                 continue
 
             if not is_matching_target(detailed_job["Title"], detailed_job["Description"]):
-                print("   -> Skipped: Non-target role (No Python mentioned, or it is Data/QA).")
+                print("   -> Skipped: Non-target role.")
                 continue
 
             processed_jobs.append(detailed_job)
@@ -50,6 +51,10 @@ def main():
 
     print(f"\nDone! Perfect target jobs saved: {len(processed_jobs)}")
     print(f"File: {os.path.abspath(filename)}")
+
+
+    if processed_jobs:
+        analyze_jobs_with_cv(processed_jobs)
 
 
 if __name__ == "__main__":
