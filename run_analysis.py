@@ -1,33 +1,44 @@
-import csv
 import os
+import sqlite3
 from utils.analyzer import analyze_jobs_with_cv
 
 
 def run_standalone_analysis():
-    csv_path = os.path.join("results", "perfect_target_jobs.csv")
+    db_path = os.path.join("results", "jobs.db")
 
-    if not os.path.exists(csv_path):
-        print(f"Error: {csv_path} not found. You must run the scraper at least once first.")
+    if not os.path.exists(db_path):
+        print(f"Error: {db_path} not found. You must run the scraper at least once first.")
         return
 
-    print(f"Loading jobs from {csv_path} for re-analysis...")
+    print(f"Loading unanalyzed jobs from {db_path} for processing...")
 
     jobs_to_analyze = []
     try:
-        with open(csv_path, mode='r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                jobs_to_analyze.append(row)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+
+        cursor.execute("SELECT * FROM jobs WHERE match_score IS NULL")
+        rows = cursor.fetchall()
+
+        for row in rows:
+            jobs_to_analyze.append({
+                "Title": row["title"],
+                "Country": row["country"],
+                "Description": row["description"],
+                "Link": row["link"]
+            })
+        conn.close()
     except Exception as e:
-        print(f"Error reading CSV: {e}")
+        print(f"Error reading Database: {e}")
         return
 
     if not jobs_to_analyze:
-        print("No jobs found in the CSV file to analyze.")
+        print("No new jobs found in the Database to analyze.")
         return
 
-    print(f"Found {len(jobs_to_analyze)} jobs. Starting Gemini analysis...")
-    # This calls the function in your utils/analyzer.py
+    print(f"Found {len(jobs_to_analyze)} unanalyzed jobs. Starting Gemini analysis...")
     analyze_jobs_with_cv(jobs_to_analyze)
 
 

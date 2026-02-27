@@ -5,3 +5,4 @@ results/perfect_target_jobs.csv
 *.pyc
 results/cv_analysis_report.md
 cv.pdf
+results/jobs.db

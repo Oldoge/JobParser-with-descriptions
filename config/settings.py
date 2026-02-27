@@ -118,3 +118,9 @@ QA_WORDS = ["qa", "quality assurance", "test", "tester"]
 # Stop words for senior roles and management
 STOP_SENIOR_WORDS = ["senior", "lead", "principal", "architect", "head of", "staff", "manager", "director"]
 
+CLOUD_SIGNALS = [
+    "sre", "site reliability", "platform engineer", "cloud",
+    "devops", "kubernetes", "k8s", "aws", "gcp", "azure",
+    "docker", "terraform", "ci/cd", "infrastructure"
+]
+

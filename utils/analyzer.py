@@ -1,5 +1,7 @@
 import os
 import time
+import re
+import sqlite3
 import google.api_core.exceptions
 from google import genai
 from PyPDF2 import PdfReader
@@ -17,6 +19,23 @@ def extract_text_from_pdf(pdf_path):
     except Exception as e:
         print(f"Error reading PDF: {e}")
     return text
+
+
+def update_job_in_db(link, score, report, db_path="results/jobs.db"):
+    """Update the job entry in the database with the match score and analysis report."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+                       UPDATE jobs
+                       SET match_score     = ?,
+                           analysis_report = ?
+                       WHERE link = ?
+                       ''', (score, report, link))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error db when adding: {e}")
 
 
 def analyze_jobs_with_cv(jobs, cv_file_path="cv.pdf"):
@@ -37,46 +56,60 @@ def analyze_jobs_with_cv(jobs, cv_file_path="cv.pdf"):
     os.makedirs("results", exist_ok=True)
     report_path = os.path.join("results", "cv_analysis_report.md")
 
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write("# Job Analysis Report\n\n")
+    # Saving the report in Markdown format for better readability
+    if not os.path.exists(report_path):
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write("# Job Analysis Report\n\n")
 
     print("Starting analysis (with auto-retry logic)...")
 
     for i, job in enumerate(jobs):
-
         print(f"[{i + 1}/{len(jobs)}] Analyzing: {job['Title']}...")
 
-        prompt = (f"CV: {cv_text}\n\nJob: {job['Title']}\nDesc: {job['Description']}\n\nAnalyze Pros and Cons. Today is {time.strftime('%Y-%m-%d')}."
-                  f"n\nProvide a concise analysis of how well the CV matches the job description, highlighting key strengths and potential gaps. Use bullet points for clarity."
-                  f"n\nBe honest and critical, but also constructive. Focus on the most relevant skills, experiences, and qualifications. Avoid generic statements and provide specific insights based on the CV and job description."
-                  f"n\nFormat the response in markdown with clear sections for Pros and Cons."
-                  f"n\nWrite on Russian."
-                  f"n\nExample format:\n\n## {job['Title']} - {job['Country']}\n\n### Pros:\n- Relevant experience in X\n- Strong skills in Y\n\n### Cons:\n- Lack of experience in Z\n- Missing certification in W\n\n---\n"
-                  f"n\nWrite the analysis in Russian, but keep the job title and country in English for clarity. Make sure to provide a balanced view, acknowledging both the strengths and weaknesses of the CV in relation to the job description. Avoid being overly negative or positive, and focus on providing actionable insights that could help improve the CV or better align it with the job requirements."
-                  f"n\n Wrtie summary, but in percents, how well the CV matches the job description, based on the analysis of pros and cons. Provide a percentage score that reflects the overall fit of the CV for the job, considering both the strengths and weaknesses identified in the analysis. The score should be a balanced reflection of how well the CV meets the key requirements and qualifications outlined in the job description, while also acknowledging any potential gaps or areas for improvement.")
-
+        prompt = (f"CV: {cv_text}\n\nJob: {job['Title']}\nDesc: {job['Description']}\n\n"
+                  f"Analyze Pros and Cons.\n\n"
+                  f"Provide a concise analysis of how well the CV matches the job description, highlighting key strengths and potential gaps. Use bullet points for clarity.\n\n"
+                  f"Be honest and critical, but also constructive. Focus on the most relevant skills, experiences, and qualifications. Avoid generic statements and provide specific insights based on the CV and job description.\n\n"
+                  f"Format the response in markdown with clear sections for Pros and Cons.\n\n"
+                  f"Write the analysis in Russian, but keep the job title and country in English for clarity. Make sure to provide a balanced view, acknowledging both the strengths and weaknesses of the CV in relation to the job description.\n\n"
+                  f"CRITICAL: At the very end of your response, write the final match score strictly in this format: 'Match Score: X%', where X is a number from 0 to 100 based on your analysis.")
 
         success = False
         retries = 0
         max_retries = 5
-        wait_time = 30  # Initial wait in seconds if blocked
+        wait_time = 30
 
         while not success and retries < max_retries:
             try:
                 response = client.models.generate_content(model=model_id, contents=prompt)
+                report_text = response.text
 
+                # Parsing the match score from the end of the response
+                score = None
+                match = re.search(r'(?:Match Score:?\s*|Итоговая оценка:?\s*|Совпадение:?\s*)?(\d{1,3})%', report_text,
+                                  re.IGNORECASE)
+                if match:
+                    score = int(match.group(1))
+
+                # Writing the analysis report and score back to the database
+                update_job_in_db(job['Link'], score, report_text)
+
+                    # Saving the report in a Markdown file for better readability
                 with open(report_path, "a", encoding="utf-8") as f:
                     f.write(f"## {job['Title']} - {job['Country']}\n")
-                    f.write(f"{response.text}\n\n---\n\n")
+                    f.write(f"{report_text}\n\n")
+                    if score is not None:
+                        f.write(f"**Extracted Match Score: {score}%**\n")
+                    f.write(f"---\n\n")
 
                 success = True
-                time.sleep(3)  # Safe gap between successful requests
+                time.sleep(3)
 
-            except google.api_core.exceptions.ResourceExhausted as e:
+            except google.api_core.exceptions.ResourceExhausted:
                 retries += 1
                 print(f"   Rate limit hit. Waiting {wait_time}s before retry {retries}/{max_retries}...")
                 time.sleep(wait_time)
-                wait_time *= 1  # Wait longer each time
+                wait_time *= 2  # Exponential backoff
             except Exception as e:
                 print(f"   Unexpected error: {e}")
                 break

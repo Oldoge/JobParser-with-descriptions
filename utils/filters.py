@@ -1,24 +1,36 @@
 import re
-from config.settings import TARGET_KEYWORDS, STOP_ROLES, QA_WORDS, STOP_SENIOR_WORDS
+from config.settings import TARGET_KEYWORDS, STOP_ROLES, QA_WORDS, STOP_SENIOR_WORDS, CLOUD_SIGNALS
+
+
 
 
 def detect_grade(title, description):
     text = f"{title} {description}".lower()
 
-    if any(word in text for word in ["junior", "intern", "trainee", "без опыта", "entry"]):
-        return "Junior / Intern"
-    elif any(word in text for word in
-             ["middle", "mid-level", "2 years", "3 years", "2 gadi", "3 gadi", "2 года", "3 года"]):
-        return "Middle"
 
-    return "Not Specified"
+    grade = "Not Specified"
+    if any(word in text for word in ["junior", "intern", "trainee", "без опыта", "entry"]):
+        grade = "Junior / Intern"
+    elif any(word in text for word in ["middle", "mid-level", "2 years", "3 years", "2 gadi", "3 gadi", "2 года", "3 года"]):
+        grade = "Middle"
+
+    # 2. Cloud-signal prioritization (Приоритизация инфраструктурных ролей)
+    if any(signal in text for signal in CLOUD_SIGNALS):
+        if grade == "Not Specified":
+            grade = "Cloud/Infra Priority"
+        else:
+            grade += " | Cloud/Infra Priority"
+
+    return grade
 
 
 def is_unsuitable_job(title, description):
     text = f"{title} {description}".lower()
 
+
     if any(word in text for word in STOP_SENIOR_WORDS):
         return True
+
 
     exp_pattern = re.compile(r'(?<!-)\b([4-9]|[1-9]\d)\+?\s*(?:years|yrs|gadi|gadu|лет|года|год)')
     plus_exp_pattern = re.compile(r'\+\s*([4-9]|[1-9]\d)\s*(?:years|yrs|gadi|gadu|лет|года|год)')
@@ -33,7 +45,7 @@ def is_matching_target(title, description):
     title_lower = title.lower()
     desc_lower = description.lower()
 
-    # 1. Mandatory check for Python
+    # 1. Mandatory check for Python (Language filtering)
     if "python" not in title_lower and "python" not in desc_lower:
         return False
 
