@@ -1,11 +1,11 @@
 import os
 import time
 import re
-import sqlite3
 import google.api_core.exceptions
 from google import genai
 from PyPDF2 import PdfReader
 from config.settings import GEMINI_API_KEY
+from utils.database import JobDatabase
 
 
 def extract_text_from_pdf(pdf_path):
@@ -17,89 +17,106 @@ def extract_text_from_pdf(pdf_path):
             if extracted:
                 text += extracted + "\n"
     except Exception as e:
-        print(f"Error reading PDF: {e}")
+        print(f"Error reading PDF {pdf_path}: {e}")
     return text
 
 
-def update_job_in_db(link, score, report, db_path="results/jobs.db"):
-    """Update the job entry in the database with the match score and analysis report."""
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-                       UPDATE jobs
-                       SET match_score     = ?,
-                           analysis_report = ?
-                       WHERE link = ?
-                       ''', (score, report, link))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"Error db when adding: {e}")
+def get_all_cvs_text(cv_folder="cv_storage"):
+    if not os.path.exists(cv_folder):
+        os.makedirs(cv_folder, exist_ok=True)
+        print(f"Directory '{cv_folder}' created. Please put your CV PDFs there.")
+        return None, []
+
+    cv_files = [f for f in os.listdir(cv_folder) if f.lower().endswith('.pdf')]
+    if not cv_files:
+        return None, []
+
+    combined_text = ""
+    for file in cv_files:
+        path = os.path.join(cv_folder, file)
+        text = extract_text_from_pdf(path)
+        combined_text += f"\n\n--- [CV File: {file}] ---\n{text}"
+
+    return combined_text, cv_files
 
 
-def analyze_jobs_with_cv(jobs, cv_file_path="cv.pdf"):
+def analyze_jobs_with_cv(jobs, cv_folder="cv_storage"):
     if not GEMINI_API_KEY:
-        print("Warning: Gemini API key is not set. Skipping analysis.")
+        print("Warning: Gemini API key is not set.")
         return
 
-    if not os.path.exists(cv_file_path):
-        print(f"Warning: CV file '{cv_file_path}' not found.")
-        return
+    print("Extracting text from all CVs...")
+    cvs_text, cv_files = get_all_cvs_text(cv_folder)
 
-    print("Extracting text from CV...")
-    cv_text = extract_text_from_pdf(cv_file_path)
+    if not cvs_text:
+        print(f"Warning: No CVs found in '{cv_folder}'.")
+        return
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    model_id = "gemini-3-pro-preview"
+    model_id = "gemini-3.1-flash-lite-preview"
 
     os.makedirs("results", exist_ok=True)
     report_path = os.path.join("results", "cv_analysis_report.md")
+    db = JobDatabase()
 
-    # Saving the report in Markdown format for better readability
     if not os.path.exists(report_path):
         with open(report_path, "w", encoding="utf-8") as f:
-            f.write("# Job Analysis Report\n\n")
-
-    print("Starting analysis (with auto-retry logic)...")
+            f.write("# Job Analysis Report (Multi-CV)\n\n")
 
     for i, job in enumerate(jobs):
         print(f"[{i + 1}/{len(jobs)}] Analyzing: {job['Title']}...")
 
-        prompt = (f"CV: {cv_text}\n\nJob: {job['Title']}\nDesc: {job['Description']}\n\n"
-                  f"Analyze Pros and Cons.\n\n"
-                  f"Provide a concise analysis of how well the CV matches the job description, highlighting key strengths and potential gaps. Use bullet points for clarity.\n\n"
-                  f"Be honest and critical, but also constructive. Focus on the most relevant skills, experiences, and qualifications. Avoid generic statements and provide specific insights based on the CV and job description.\n\n"
-                  f"Format the response in markdown with clear sections for Pros and Cons.\n\n"
-                  f"Write the analysis in Russian, but keep the job title and country in English for clarity. Make sure to provide a balanced view, acknowledging both the strengths and weaknesses of the CV in relation to the job description.\n\n"
-                  f"CRITICAL: At the very end of your response, write the final match score strictly in this format: 'Match Score: X%', where X is a number from 0 to 100 based on your analysis.")
+        prompt = (f"Here are {len(cv_files)} variants of my CV:\n{cvs_text}\n\n"
+                  f"Job Title: {job['Title']}\nJob Description: {job['Description']}\n\n"
+                  f"Task:\n"
+                  f"1. Compare the job description against all provided CV variants.\n"
+                  f"2. Choose the ONE best CV variant that gives the highest chance of getting an interview.\n"
+                  f"3. Explain why it's the best fit and list Pros/Cons.\n"
+                  f"4. If the Match Score for the winning CV is GREATER THAN 35%, write a tailored Cover Letter in Formal English, more polite, more humanized, a bit cheeky based on that CV. If score is 35% or lower, state 'No Cover Letter'.\n"
+                  f"5. Write analysis in Russian.\n\n"
+                  f"CRITICAL: End your response EXACTLY in this format:\n"
+                  f"Recommended CV: [Exact file name]\n"
+                  f"Match Score: [X]%\n"
+                  f"---COVER LETTER---\n"
+                  f"[Cover letter text or 'None']")
 
         success = False
         retries = 0
-        max_retries = 5
         wait_time = 30
 
-        while not success and retries < max_retries:
+        while not success and retries < 5:
             try:
                 response = client.models.generate_content(model=model_id, contents=prompt)
                 report_text = response.text
 
-                # Parsing the match score from the end of the response
                 score = None
-                match = re.search(r'(?:Match Score:?\s*|Итоговая оценка:?\s*|Совпадение:?\s*)?(\d{1,3})%', report_text,
-                                  re.IGNORECASE)
-                if match:
-                    score = int(match.group(1))
+                best_cv = None
+                cover_letter = None
 
-                # Writing the analysis report and score back to the database
-                update_job_in_db(job['Link'], score, report_text)
+                score_match = re.search(r'Match Score:?\s*(\d{1,3})%', report_text, re.IGNORECASE)
+                if score_match:
+                    score = int(score_match.group(1))
 
-                    # Saving the report in a Markdown file for better readability
+                cv_match = re.search(r'Recommended CV:?\s*([a-zA-Z0-9_\-\.]+)', report_text, re.IGNORECASE)
+                if cv_match:
+                    best_cv = cv_match.group(1).strip()
+
+                cl_split = report_text.split("---COVER LETTER---")
+                if len(cl_split) > 1:
+                    cover_letter = cl_split[1].strip()
+
+                # Убираем блок Cover Letter из общего отчета для чистоты, если он найден
+                main_report = cl_split[0].strip() if len(cl_split) > 1 else report_text
+
+                db.update_analysis(job['Link'], score, main_report, best_cv, cover_letter)
+
                 with open(report_path, "a", encoding="utf-8") as f:
                     f.write(f"## {job['Title']} - {job['Country']}\n")
-                    f.write(f"{report_text}\n\n")
+                    f.write(f"{main_report}\n\n")
                     if score is not None:
-                        f.write(f"**Extracted Match Score: {score}%**\n")
+                        f.write(f"**Score: {score}% | CV: {best_cv}**\n")
+                    if cover_letter and cover_letter.lower() not in ['none', 'no cover letter']:
+                        f.write(f"### Cover Letter:\n{cover_letter}\n")
                     f.write(f"---\n\n")
 
                 success = True
@@ -107,11 +124,10 @@ def analyze_jobs_with_cv(jobs, cv_file_path="cv.pdf"):
 
             except google.api_core.exceptions.ResourceExhausted:
                 retries += 1
-                print(f"   Rate limit hit. Waiting {wait_time}s before retry {retries}/{max_retries}...")
                 time.sleep(wait_time)
-                wait_time *= 2  # Exponential backoff
+                wait_time *= 2
             except Exception as e:
-                print(f"   Unexpected error: {e}")
+                print(f"Unexpected error: {e}")
                 break
 
-    print(f"Analysis complete. Report: {report_path}")
+    db.close()

@@ -9,7 +9,6 @@ class JobDatabase:
 
     def create_tables(self):
         cursor = self.conn.cursor()
-        # create jobs table with additional fields for analysis results
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,13 +21,14 @@ class JobDatabase:
                 source TEXT,
                 description TEXT,
                 match_score INTEGER DEFAULT NULL,
-                analysis_report TEXT DEFAULT NULL
+                analysis_report TEXT DEFAULT NULL,
+                recommended_cv TEXT DEFAULT NULL,
+                cover_letter TEXT DEFAULT NULL
             )
         ''')
         self.conn.commit()
 
     def save_job(self, job):
-        """save job to database, ignoring duplicates based on link"""
         cursor = self.conn.cursor()
         try:
             cursor.execute('''
@@ -36,18 +36,26 @@ class JobDatabase:
                 (title, grade, salary, country, posted, link, source, description)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                job.get("Title"),
-                job.get("Grade"),
-                job.get("Salary"),
-                job.get("Country"),
-                job.get("Posted"),
-                job.get("Link"),
-                job.get("Source"),
-                job.get("Description")
+                job.get("Title"), job.get("Grade"), job.get("Salary"),
+                job.get("Country"), job.get("Posted"), job.get("Link"),
+                job.get("Source"), job.get("Description")
             ))
             self.conn.commit()
         except sqlite3.Error as e:
             print(f"Error creating database: {e}")
+
+    def update_analysis(self, link, score, report, best_cv, cover_letter):
+        """Метод для сохранения результатов анализа в БД."""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute('''
+                UPDATE jobs 
+                SET match_score = ?, analysis_report = ?, recommended_cv = ?, cover_letter = ?
+                WHERE link = ?
+            ''', (score, report, best_cv, cover_letter, link))
+            self.conn.commit()
+        except sqlite3.Error as e:
+            print(f"Error updating database: {e}")
 
     def get_all_jobs(self):
         cursor = self.conn.cursor()

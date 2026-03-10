@@ -17,8 +17,6 @@ def run_standalone_analysis():
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-
-
         cursor.execute("SELECT * FROM jobs WHERE match_score IS NULL")
         rows = cursor.fetchall()
 
@@ -35,10 +33,13 @@ def run_standalone_analysis():
         return
 
     if not jobs_to_analyze:
-        print("No new jobs found in the Database to analyze.")
+        print("No new unanalyzed jobs found in the Database.")
         return
 
-    print(f"Found {len(jobs_to_analyze)} unanalyzed jobs. Starting Gemini analysis...")
+    print(f"Found {len(jobs_to_analyze)} unanalyzed jobs.")
+    print("Starting Multi-CV analysis and Cover Letter generation via Gemini...")
+
+
     analyze_jobs_with_cv(jobs_to_analyze)
 
 

@@ -13,27 +13,45 @@ def extract_job_details(driver, job):
 
     try:
         if job["Source"] == "LinkedIn":
-            if "auth_wall" in driver.current_url or "sign in" in driver.title.lower():
-                description = "LinkedIn requires authorization to view"
-            else:
-                try:
-                    driver.find_element(By.CSS_SELECTOR, ".show-more-less-html__button").click()
-                    time.sleep(0.5)
-                except:
-                    pass
 
-                try:
+            try:
+                driver.execute_script("""
+                    var btn = document.querySelector('.show-more-less-html__button');
+                    if (btn) { btn.click(); }
+
+                    var overlays = document.querySelectorAll('.modal__overlay, .contextual-sign-in-modal');
+                    overlays.forEach(function(el) { el.remove(); });
+                    document.body.style.overflow = 'auto';
+                """)
+                time.sleep(1)
+            except:
+                pass
+
+
+            try:
+                description = driver.execute_script("""
+                    var el = document.querySelector('.show-more-less-html__markup, .jobs-description-content__text');
+                    return el ? el.textContent : null;
+                """)
+
+                if not description or len(description.strip()) < 10:
                     desc_el = driver.find_element(By.CSS_SELECTOR,
                                                   ".show-more-less-html__markup, .jobs-description-content__text")
                     description = desc_el.text
-                except:
-                    pass
+            except:
+                if "auth_wall" in driver.current_url or "sign in" in driver.title.lower():
+                    description = "LinkedIn requires authorization to view (Auth wall hard block)"
 
-                try:
+            try:
+                salary = driver.execute_script("""
+                    var el = document.querySelector('.compensation__salary-tooltip-text');
+                    return el ? el.textContent : 'Not specified';
+                """)
+                if salary == 'Not specified' or not salary:
                     sal_el = driver.find_element(By.CSS_SELECTOR, ".compensation__salary-tooltip-text")
                     salary = sal_el.text
-                except:
-                    pass
+            except:
+                pass
 
         else:
             iframes = driver.find_elements(By.TAG_NAME, "iframe")
@@ -66,8 +84,16 @@ def extract_job_details(driver, job):
     except Exception as e:
         pass
 
-    job["Description"] = description.replace("\n", " | ").strip()
-    job["Salary"] = salary.strip()
-    job["Grade"] = detect_grade(job["Title"], description)
+    if description:
+        job["Description"] = description.replace("\n", " | ").strip()
+    else:
+        job["Description"] = "Could not extract"
+
+    if salary:
+        job["Salary"] = salary.strip()
+    else:
+        job["Salary"] = "Not specified"
+
+    job["Grade"] = detect_grade(job["Title"], job["Description"])
 
     return job

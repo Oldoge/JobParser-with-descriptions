@@ -1,7 +1,45 @@
 import time
 import random
+import re
+from datetime import datetime, timedelta
 from selenium.webdriver.common.by import By
 from config.settings import MAX_PAGES, STOP_LINK_TEXTS
+
+
+def calculate_absolute_time(relative_str):
+    """convert relative time strings like '2 hours ago' to absolute timestamps"""
+    if not relative_str or relative_str == "Not specified":
+        return relative_str
+
+    relative_str = relative_str.lower()
+    now = datetime.now()
+
+    # Поиск числа в строке
+    match = re.search(r'\d+', relative_str)
+    if not match:
+        if "just now" in relative_str or "now" in relative_str:
+            return now.strftime("%Y-%m-%d %H:%M:%S")
+        return relative_str
+
+    value = int(match.group())
+
+    if "minute" in relative_str or "min" in relative_str:
+        delta = timedelta(minutes=value)
+    elif "hour" in relative_str:
+        delta = timedelta(hours=value)
+    elif "day" in relative_str:
+        delta = timedelta(days=value)
+    elif "week" in relative_str:
+        delta = timedelta(weeks=value)
+    elif "month" in relative_str:
+        delta = timedelta(days=value * 30)
+    elif "year" in relative_str:
+        delta = timedelta(days=value * 365)
+    else:
+        return relative_str
+
+    absolute_time = now - delta
+    return absolute_time.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def collect_links(driver, site):
@@ -60,16 +98,18 @@ def collect_links(driver, site):
 
                     if "job" in href and text and not is_system_link:
                         try:
-                            posted_date = card.find_element(By.TAG_NAME, "time").text.strip()
+                            raw_posted_date = card.find_element(By.TAG_NAME, "time").text.strip()
+                            calc_time = calculate_absolute_time(raw_posted_date)
+                            final_posted = f"{raw_posted_date} ({calc_time})"
                         except:
-                            posted_date = "Not specified"
+                            final_posted = "Not specified"
 
                         jobs.append({
                             "Title": text,
                             "Link": href.split("?")[0],
                             "Country": site["country"],
                             "Source": site["source"],
-                            "Posted": posted_date
+                            "Posted": final_posted
                         })
                 except:
                     continue
@@ -94,12 +134,20 @@ def collect_links(driver, site):
             """)
             for link in links:
                 if link['title'] and "cv.lv" not in link['title'].lower():
+                    raw_posted = link['posted']
+                    calc_time = calculate_absolute_time(raw_posted)
+
+                    if raw_posted != "Not specified" and raw_posted != calc_time:
+                        final_posted = f"{raw_posted} ({calc_time})"
+                    else:
+                        final_posted = raw_posted
+
                     jobs.append({
                         "Title": link['title'],
                         "Link": link['href'],
                         "Country": site["country"],
                         "Source": site["source"],
-                        "Posted": link['posted']
+                        "Posted": final_posted
                     })
         except Exception as e:
             pass
